@@ -45,9 +45,6 @@ class PlayerActivity : AppCompatActivity() {
   /** A single externally-opened video that has no known folder yet. */
   private var pendingSingleUri: Uri? = null
 
-  /** True after we auto-opened the folder picker for the current pending file. */
-  private var folderPickerAutoLaunched = false
-
   /** Current orientation override mode; persisted across launches. */
   private var orientationMode: Int = MODE_AUTO
 
@@ -87,6 +84,7 @@ class PlayerActivity : AppCompatActivity() {
       launchFolderPicker(hints.firstOrNull())
     }
     binding.rotateButton.setOnClickListener { cycleOrientationMode() }
+    binding.folderGrantBanner.setOnClickListener { requestFolderGrant() }
 
     // Apply the persisted orientation mode before the window is laid out so the
     // system does not flash the wrong orientation on launch.
@@ -103,6 +101,8 @@ class PlayerActivity : AppCompatActivity() {
         binding.rotateButton.visibility = gated
         binding.titleText.visibility =
           if (hasContent && binding.titleText.text.isNotEmpty()) visibility else View.GONE
+        binding.folderGrantBanner.visibility =
+          if (pendingSingleUri != null) View.VISIBLE else View.GONE
       },
     )
 
@@ -140,26 +140,20 @@ class PlayerActivity : AppCompatActivity() {
   /**
    * Handles an externally opened video. If we already hold a SAF folder that
    * contains a file with the same name, we play the whole folder; otherwise we
-   * play the file and open the SAF folder picker so the user can grant the
-   * folder in one tap (next/previous then works for every video in it).
+   * play the file and show a banner so the user can grant the folder when ready
+   * (Samsung often ignores EXTRA_INITIAL_URI and opens DCIM instead).
    */
-  private fun openExternalVideo(uri: Uri, offerFolderGrant: Boolean = true) {
+  private fun openExternalVideo(uri: Uri) {
     val name = VideoFolder.displayNameOf(this, uri)
     val match = name?.let { findFolderContaining(it) }
     if (match != null) {
       pendingSingleUri = null
-      folderPickerAutoLaunched = false
       startPlaylist(match.videos, match.index, 0L)
       return
     }
-    if (pendingSingleUri != uri) folderPickerAutoLaunched = false
+    val hints = VideoFolder.initialFolderHints(this, uri)
+    SafUriDebug.logOpenWith(this, uri, hints)
     playSingleExternalVideo(uri, name)
-    if (offerFolderGrant && !folderPickerAutoLaunched) {
-      folderPickerAutoLaunched = true
-      val hints = VideoFolder.initialFolderHints(this, uri)
-      SafUriDebug.logOpenWith(this, uri, hints)
-      binding.playerView.post { launchFolderPicker(hints.firstOrNull()) }
-    }
   }
 
   /** Plays one file with no folder playlist (next/prev disabled until SAF grant). */
@@ -171,12 +165,38 @@ class PlayerActivity : AppCompatActivity() {
     binding.emptyState.visibility = View.GONE
     binding.folderButton.visibility = View.VISIBLE
     binding.titleText.text = name ?: ""
+    updateFolderGrantBanner()
     initPlayer()
     player?.apply {
       setMediaItems(listOf(buildMediaItem(VideoItem(uri, name ?: ""))))
       prepare()
       playWhenReady = true
     }
+    setupTransportOverrides()
+  }
+
+  private fun updateFolderGrantBanner() {
+    val uri = pendingSingleUri
+    if (uri == null) {
+      binding.folderGrantBanner.visibility = View.GONE
+      return
+    }
+    val folderName = VideoFolder.folderDisplayNameFromUri(uri)
+    binding.folderGrantBanner.text =
+      if (folderName != null) {
+        getString(R.string.folder_grant_banner_named, folderName)
+      } else {
+        getString(R.string.folder_grant_banner_generic)
+      }
+    binding.folderGrantBanner.visibility = View.VISIBLE
+  }
+
+  private fun needsFolderGrant(): Boolean = pendingSingleUri != null && playlist.isEmpty()
+
+  private fun requestFolderGrant() {
+    val uri = pendingSingleUri ?: return
+    val hints = VideoFolder.initialFolderHints(this, uri)
+    launchFolderPicker(hints.firstOrNull())
   }
 
   private data class FolderMatch(val videos: List<VideoItem>, val index: Int)
@@ -215,7 +235,7 @@ class PlayerActivity : AppCompatActivity() {
       return
     }
     pendingSingleUri = null
-    folderPickerAutoLaunched = false
+    binding.folderGrantBanner.visibility = View.GONE
     val index = preferredName?.let { name -> videos.indexOfFirst { it.name == name } }
       ?.takeIf { it >= 0 } ?: 0
     startPlaylist(videos, index, 0L)
@@ -246,6 +266,7 @@ class PlayerActivity : AppCompatActivity() {
     binding.folderButton.visibility = View.GONE
     binding.rotateButton.visibility = View.GONE
     binding.titleText.visibility = View.GONE
+    binding.folderGrantBanner.visibility = View.GONE
   }
 
   /**
@@ -300,6 +321,24 @@ class PlayerActivity : AppCompatActivity() {
       }
     })
     player = exo
+    setupTransportOverrides()
+  }
+
+  /**
+   * When only one file is open without a SAF folder grant, next/previous opens
+   * the folder picker instead of doing nothing.
+   */
+  private fun setupTransportOverrides() {
+    binding.playerView.post {
+      val next = binding.playerView.findViewById<View>(androidx.media3.ui.R.id.exo_next)
+      val prev = binding.playerView.findViewById<View>(androidx.media3.ui.R.id.exo_prev)
+      next?.setOnClickListener {
+        if (needsFolderGrant()) requestFolderGrant() else player?.seekToNext()
+      }
+      prev?.setOnClickListener {
+        if (needsFolderGrant()) requestFolderGrant() else player?.seekToPrevious()
+      }
+    }
   }
 
   private fun updateTitle() {
@@ -323,6 +362,7 @@ class PlayerActivity : AppCompatActivity() {
         pendingSingleUri?.let { uri ->
           val name = VideoFolder.displayNameOf(this, uri)
           playSingleExternalVideo(uri, name)
+          updateFolderGrantBanner()
         }
       }
     }

@@ -104,6 +104,14 @@ object VideoFolder {
   fun initialFolderHint(context: Context, fileUri: Uri): Uri? =
     initialFolderHints(context, fileUri).firstOrNull()
 
+  /** Human-readable parent folder name (e.g. "Recordings") for UI hints. */
+  fun folderDisplayNameFromUri(fileUri: Uri): String? {
+    val rel = absolutePathFromUri(fileUri)?.let(::pathToPrimaryRelative) ?: return null
+    val parent = rel.substringBeforeLast('/', "")
+    if (parent.isEmpty()) return null
+    return parent.substringAfterLast('/')
+  }
+
   /** Returns an absolute on-disk path for [uri] when one is recoverable. */
   private fun absolutePathFromUri(uri: Uri): String? = when (uri.scheme) {
     "file" -> uri.path

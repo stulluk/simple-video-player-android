@@ -7,4 +7,6 @@
   <string name="rotate_button">Rotation mode</string>
   <string name="no_videos">No playable videos found in this folder.</string>
   <string name="playback_error">Cannot play this video.</string>
+  <string name="folder_grant_banner_named">Tap to enable next/previous in folder: %1$s</string>
+  <string name="folder_grant_banner_generic">Tap to enable next/previous in this folder</string>
 </resources>

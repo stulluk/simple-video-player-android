@@ -71,6 +71,21 @@
   <!-- Centered directly under the prev/pause/next row of the Media3 controls.
        The center playback row sits at the PlayerView's vertical center, so
        offsetting this button downward by ~64dp places it just below that row. -->
+  <TextView
+    android:id="@+id/folderGrantBanner"
+    android:layout_width="wrap_content"
+    android:layout_height="wrap_content"
+    android:layout_gravity="bottom|center_horizontal"
+    android:layout_marginBottom="88dp"
+    android:background="#CC000000"
+    android:clickable="true"
+    android:focusable="true"
+    android:paddingHorizontal="16dp"
+    android:paddingVertical="10dp"
+    android:textColor="@android:color/white"
+    android:textSize="14sp"
+    android:visibility="gone" />
+
   <ImageButton
     android:id="@+id/rotateButton"
     android:layout_width="48dp"
