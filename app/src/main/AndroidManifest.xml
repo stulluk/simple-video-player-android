@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+  <application
+    android:allowBackup="true"
+    android:icon="@mipmap/ic_launcher"
+    android:label="@string/app_name"
+    android:supportsRtl="true"
+    android:theme="@style/Theme.SimpleVideoPlayer">
+
+    <activity
+      android:name=".PlayerActivity"
+      android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden"
+      android:exported="true"
+      android:label="@string/app_name"
+      android:launchMode="singleTask">
+
+      <intent-filter>
+        <action android:name="android.intent.action.MAIN" />
+        <category android:name="android.intent.category.LAUNCHER" />
+      </intent-filter>
+
+      <!-- "Open with" from file managers (CX / EX File Explorer, etc.). -->
+      <intent-filter>
+        <action android:name="android.intent.action.VIEW" />
+        <category android:name="android.intent.category.DEFAULT" />
+        <category android:name="android.intent.category.BROWSABLE" />
+        <data android:mimeType="video/*" />
+      </intent-filter>
+
+      <!-- Some managers report Matroska files with this explicit type. -->
+      <intent-filter>
+        <action android:name="android.intent.action.VIEW" />
+        <category android:name="android.intent.category.DEFAULT" />
+        <category android:name="android.intent.category.BROWSABLE" />
+        <data android:mimeType="video/x-matroska" />
+      </intent-filter>
+
+    </activity>
+
+  </application>
+
+</manifest>

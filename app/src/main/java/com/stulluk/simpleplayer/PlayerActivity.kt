@@ -1,0 +1,254 @@
+package com.stulluk.simpleplayer
+
+import android.content.Intent
+import android.content.SharedPreferences
+import android.net.Uri
+import android.os.Bundle
+import android.view.View
+import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AppCompatActivity
+import androidx.media3.common.MediaItem
+import androidx.media3.common.MediaMetadata
+import androidx.media3.common.PlaybackException
+import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.ExoPlayer
+import com.stulluk.simpleplayer.databinding.ActivityPlayerBinding
+
+/**
+ * Single-screen video player. It can be started three ways:
+ *  - from the launcher (resumes the last picked folder, or asks to pick one);
+ *  - via "Open with" from a file manager (plays the file and, if the folder is
+ *    known, enables next/previous across every video in it);
+ *  - via the in-app folder picker.
+ *
+ * The whole point of the app is reliable next/previous navigation across mixed
+ * mp4 + mkv folders, which ExoPlayer's playlist handles natively.
+ */
+@UnstableApi
+class PlayerActivity : AppCompatActivity() {
+
+  private lateinit var binding: ActivityPlayerBinding
+  private lateinit var prefs: SharedPreferences
+  private var player: ExoPlayer? = null
+
+  /** Current playlist and the index we should resume at when (re)creating the player. */
+  private var playlist: List<VideoItem> = emptyList()
+  private var startIndex: Int = 0
+  private var startPositionMs: Long = 0L
+
+  /** A single externally-opened video that has no known folder yet. */
+  private var pendingSingleUri: Uri? = null
+
+  private val openFolder = registerForActivityResult(
+    ActivityResultContracts.OpenDocumentTree(),
+  ) { uri -> if (uri != null) onFolderPicked(uri) }
+
+  override fun onCreate(savedInstanceState: Bundle?) {
+    super.onCreate(savedInstanceState)
+    binding = ActivityPlayerBinding.inflate(layoutInflater)
+    setContentView(binding.root)
+    prefs = getSharedPreferences("svp", MODE_PRIVATE)
+
+    binding.emptyPickButton.setOnClickListener { launchFolderPicker() }
+    binding.folderButton.setOnClickListener { launchFolderPicker() }
+
+    binding.playerView.setControllerVisibilityListener(
+      androidx.media3.ui.PlayerView.ControllerVisibilityListener { visibility ->
+        // Keep the overlay chrome (folder button + title) in sync with controls.
+        val hasContent = playlist.isNotEmpty() || pendingSingleUri != null
+        binding.folderButton.visibility = if (hasContent) visibility else View.GONE
+        binding.titleText.visibility =
+          if (hasContent && binding.titleText.text.isNotEmpty()) visibility else View.GONE
+      },
+    )
+
+    handleIntent(intent, fromNewIntent = false)
+  }
+
+  override fun onNewIntent(intent: Intent) {
+    super.onNewIntent(intent)
+    setIntent(intent)
+    handleIntent(intent, fromNewIntent = true)
+  }
+
+  /** Decides what to play based on how the activity was launched. */
+  private fun handleIntent(intent: Intent?, fromNewIntent: Boolean) {
+    val data = intent?.data
+    if (intent?.action == Intent.ACTION_VIEW && data != null) {
+      openExternalVideo(data)
+      return
+    }
+    if (fromNewIntent && playlist.isNotEmpty()) return
+    // Launcher start: resume the last folder if we still hold permission.
+    val saved = prefs.getString(KEY_FOLDER, null)?.let(Uri::parse)
+    if (saved != null && hasPersistedPermission(saved)) {
+      loadFolder(saved, preferredName = null)
+    } else {
+      showEmptyState()
+    }
+  }
+
+  /**
+   * Handles an externally opened video. If we already hold a SAF folder that
+   * contains a file with the same name, we play the whole folder; otherwise we
+   * play just this file and hint that a folder can be granted for next/previous.
+   */
+  private fun openExternalVideo(uri: Uri) {
+    val name = VideoFolder.displayNameOf(this, uri)
+    val match = name?.let { findFolderContaining(it) }
+    if (match != null) {
+      pendingSingleUri = null
+      startPlaylist(match.videos, match.index, 0L)
+      return
+    }
+    pendingSingleUri = uri
+    playlist = emptyList()
+    startIndex = 0
+    startPositionMs = 0L
+    binding.emptyState.visibility = View.GONE
+    binding.folderButton.visibility = View.VISIBLE
+    binding.titleText.text = name ?: ""
+    initPlayer()
+    player?.apply {
+      setMediaItem(buildMediaItem(VideoItem(uri, name ?: "")))
+      prepare()
+      playWhenReady = true
+    }
+    Toast.makeText(this, R.string.enable_next_hint, Toast.LENGTH_LONG).show()
+  }
+
+  private data class FolderMatch(val videos: List<VideoItem>, val index: Int)
+
+  /** Searches every persisted folder for a video whose name matches [fileName]. */
+  private fun findFolderContaining(fileName: String): FolderMatch? {
+    for (perm in contentResolver.persistedUriPermissions) {
+      if (!perm.isReadPermission) continue
+      val videos = VideoFolder.listVideos(this, perm.uri)
+      val idx = videos.indexOfFirst { it.name == fileName }
+      if (idx >= 0) return FolderMatch(videos, idx)
+    }
+    return null
+  }
+
+  private fun launchFolderPicker() {
+    runCatching { openFolder.launch(null) }
+      .onFailure { Toast.makeText(this, R.string.no_videos, Toast.LENGTH_SHORT).show() }
+  }
+
+  private fun onFolderPicked(uri: Uri) {
+    val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION
+    runCatching { contentResolver.takePersistableUriPermission(uri, flags) }
+    prefs.edit().putString(KEY_FOLDER, uri.toString()).apply()
+    // If a single external file is currently playing, try to resume it within
+    // the newly granted folder so navigation continues from the same video.
+    val currentName = pendingSingleUri?.let { VideoFolder.displayNameOf(this, it) }
+    loadFolder(uri, preferredName = currentName)
+  }
+
+  private fun loadFolder(treeUri: Uri, preferredName: String?) {
+    val videos = VideoFolder.listVideos(this, treeUri)
+    if (videos.isEmpty()) {
+      Toast.makeText(this, R.string.no_videos, Toast.LENGTH_LONG).show()
+      if (playlist.isEmpty() && pendingSingleUri == null) showEmptyState()
+      return
+    }
+    pendingSingleUri = null
+    val index = preferredName?.let { name -> videos.indexOfFirst { it.name == name } }
+      ?.takeIf { it >= 0 } ?: 0
+    startPlaylist(videos, index, 0L)
+  }
+
+  private fun startPlaylist(videos: List<VideoItem>, index: Int, positionMs: Long) {
+    playlist = videos
+    startIndex = index.coerceIn(0, videos.size - 1)
+    startPositionMs = positionMs
+    binding.emptyState.visibility = View.GONE
+    binding.folderButton.visibility = View.VISIBLE
+    initPlayer()
+    val current = player ?: return
+    current.setMediaItems(videos.map(::buildMediaItem), startIndex, startPositionMs)
+    current.prepare()
+    current.playWhenReady = true
+    updateTitle()
+  }
+
+  private fun buildMediaItem(item: VideoItem): MediaItem =
+    MediaItem.Builder()
+      .setUri(item.uri)
+      .setMediaMetadata(MediaMetadata.Builder().setTitle(item.name).build())
+      .build()
+
+  private fun showEmptyState() {
+    binding.emptyState.visibility = View.VISIBLE
+    binding.folderButton.visibility = View.GONE
+    binding.titleText.visibility = View.GONE
+  }
+
+  private fun initPlayer() {
+    if (player != null) return
+    val exo = ExoPlayer.Builder(this).build()
+    binding.playerView.player = exo
+    binding.playerView.setShowFastForwardButton(false)
+    binding.playerView.setShowRewindButton(false)
+    exo.addListener(object : Player.Listener {
+      override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+        updateTitle()
+      }
+
+      override fun onPlayerError(error: PlaybackException) {
+        Toast.makeText(this@PlayerActivity, R.string.playback_error, Toast.LENGTH_SHORT).show()
+        // Skip a single broken file instead of getting stuck on it.
+        val p = player ?: return
+        if (p.hasNextMediaItem()) {
+          p.seekToNextMediaItem()
+          p.prepare()
+        }
+      }
+    })
+    player = exo
+  }
+
+  private fun updateTitle() {
+    val title = player?.currentMediaItem?.mediaMetadata?.title?.toString().orEmpty()
+    binding.titleText.text = title
+    if (title.isNotEmpty() && binding.playerView.isControllerFullyVisible) {
+      binding.titleText.visibility = View.VISIBLE
+    }
+  }
+
+  private fun hasPersistedPermission(uri: Uri): Boolean =
+    contentResolver.persistedUriPermissions.any { it.uri == uri && it.isReadPermission }
+
+  override fun onStart() {
+    super.onStart()
+    // Re-create the player when returning to the foreground.
+    if (player == null && (playlist.isNotEmpty() || pendingSingleUri != null)) {
+      if (playlist.isNotEmpty()) {
+        startPlaylist(playlist, startIndex, startPositionMs)
+      } else {
+        pendingSingleUri?.let { openExternalVideo(it) }
+      }
+    }
+  }
+
+  override fun onStop() {
+    super.onStop()
+    releasePlayer()
+  }
+
+  private fun releasePlayer() {
+    player?.let {
+      startIndex = it.currentMediaItemIndex
+      startPositionMs = it.currentPosition
+      it.release()
+    }
+    player = null
+    binding.playerView.player = null
+  }
+
+  companion object {
+    private const val KEY_FOLDER = "last_folder_uri"
+  }
+}

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <string name="app_name">Simple Video Player</string>
+  <string name="pick_folder">Pick a folder</string>
+  <string name="empty_hint">No video selected.\nPick a folder, or open a video from a file manager.</string>
+  <string name="enable_next_hint">Tap the folder button and grant this folder to enable next/previous.</string>
+  <string name="folder_button">Choose folder</string>
+  <string name="no_videos">No playable videos found in this folder.</string>
+  <string name="playback_error">Cannot play this video.</string>
+</resources>
