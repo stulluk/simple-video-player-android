@@ -118,6 +118,11 @@ class PlayerActivity : AppCompatActivity() {
   /** Decides what to play based on how the activity was launched. */
   private fun handleIntent(intent: Intent?, fromNewIntent: Boolean) {
     val data = intent?.data
+    android.util.Log.i(
+      "SVP_URI",
+      "handleIntent fromNewIntent=$fromNewIntent action=${intent?.action} " +
+        "data=$data type=${intent?.type} extras=${intent?.extras?.keySet()}",
+    )
     if (intent?.action == Intent.ACTION_VIEW && data != null) {
       openExternalVideo(data)
       return

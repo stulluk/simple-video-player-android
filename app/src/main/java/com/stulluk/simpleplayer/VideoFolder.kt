@@ -5,7 +5,6 @@ import android.net.Uri
 import android.os.Environment
 import android.provider.DocumentsContract
 import android.provider.OpenableColumns
-import androidx.documentfile.provider.DocumentFile
 
 /** A single playable video entry: its content [uri] and display [name]. */
 data class VideoItem(val uri: Uri, val name: String)
@@ -65,36 +64,39 @@ object VideoFolder {
    */
   fun initialFolderHints(context: Context, fileUri: Uri): List<Uri> {
     val out = linkedSetOf<Uri>()
-    // Works for many third-party file managers (CX, EX, etc.) when manual doc-id parsing fails.
-    runCatching {
-      DocumentFile.fromSingleUri(context, fileUri)?.parentFile?.uri
-    }.getOrNull()?.let { parent ->
-      out += parent
-      if (DocumentsContract.isDocumentUri(context, parent)) {
-        val authority = parent.authority ?: return@let
-        val parentId = runCatching { DocumentsContract.getDocumentId(parent) }.getOrNull()
-          ?: return@let
-        if (authority == EXTERNAL_STORAGE_AUTHORITY) {
-          runCatching {
-            DocumentsContract.buildTreeDocumentUri(authority, parentId)
-          }.getOrNull()?.let { out += it }
+
+    // Path A: real DocumentsContract URI (Samsung's My Files, Files by Google, etc.).
+    if (fileUri.scheme == "content" &&
+      runCatching { DocumentsContract.isDocumentUri(context, fileUri) }.getOrDefault(false)
+    ) {
+      val authority = fileUri.authority
+      val docId = runCatching { DocumentsContract.getDocumentId(fileUri) }.getOrNull()
+      if (authority != null && docId != null) {
+        docIdParent(docId)?.let { parentId ->
+          if (authority == EXTERNAL_STORAGE_AUTHORITY) {
+            buildTreeUri(authority, parentId)?.let { out += it }
+          }
+          buildDocUri(authority, parentId)?.let { out += it }
         }
       }
     }
-    parentDocumentId(context, fileUri)?.let { (authority, parentId) ->
-      if (authority == EXTERNAL_STORAGE_AUTHORITY) {
-        runCatching {
-          DocumentsContract.buildTreeDocumentUri(authority, parentId)
-        }.getOrNull()?.let { out += it }
-      }
-      runCatching { DocumentsContract.buildDocumentUri(authority, parentId) }
-        .getOrNull()?.let { out += it }
-      if (authority == EXTERNAL_STORAGE_AUTHORITY) {
-        runCatching {
-          DocumentsContract.buildTreeDocumentUri(authority, "$parentId/")
-        }.getOrNull()?.let { out += it }
+
+    // Path B: anything we can map to an absolute path on primary storage
+    //   - file:// URIs
+    //   - third-party FileProvider URIs that embed the absolute path (e.g. CX
+    //     `content://.../root/storage/emulated/0/<rel>/<file>`).
+    // We always rebuild the hint against externalstorage so Samsung
+    // DocumentsUI accepts it instead of falling back to DCIM.
+    absolutePathFromUri(fileUri)?.let { absPath ->
+      pathToPrimaryRelative(absPath)?.let { rel ->
+        val parentRel = rel.substringBeforeLast('/', "")
+        val parentDocId =
+          if (parentRel.isEmpty()) "primary:" else "primary:$parentRel"
+        buildTreeUri(EXTERNAL_STORAGE_AUTHORITY, parentDocId)?.let { out += it }
+        buildDocUri(EXTERNAL_STORAGE_AUTHORITY, parentDocId)?.let { out += it }
       }
     }
+
     return out.toList()
   }
 
@@ -102,50 +104,23 @@ object VideoFolder {
   fun initialFolderHint(context: Context, fileUri: Uri): Uri? =
     initialFolderHints(context, fileUri).firstOrNull()
 
-  /** Resolves the parent storage document id for [fileUri], when possible. */
-  private fun parentDocumentId(context: Context, fileUri: Uri): Pair<String, String>? =
-    when (fileUri.scheme) {
-      "content" -> parentIdFromContentUri(context, fileUri)
-      "file" -> parentIdFromFileUri(fileUri)
-      else -> null
+  /** Returns an absolute on-disk path for [uri] when one is recoverable. */
+  private fun absolutePathFromUri(uri: Uri): String? = when (uri.scheme) {
+    "file" -> uri.path
+    "content" -> {
+      val raw = uri.path ?: ""
+      val decoded = Uri.decode(raw).orEmpty()
+      // Strip leading "/root", "/document", "/tree" segments that some
+      // FileProviders (CX, etc.) prepend before the real /storage path.
+      val candidates = sequenceOf(decoded) + sequenceOf("/root", "/document", "/tree")
+        .map { decoded.removePrefix(it) }
+      candidates
+        .firstOrNull { it.startsWith("/storage/") || it.startsWith("/sdcard/") }
     }
-
-  private fun parentIdFromContentUri(context: Context, fileUri: Uri): Pair<String, String>? {
-    if (DocumentsContract.isTreeUri(fileUri)) {
-      val treeId = runCatching { DocumentsContract.getTreeDocumentId(fileUri) }.getOrNull()
-      if (!treeId.isNullOrEmpty()) {
-        return (fileUri.authority ?: EXTERNAL_STORAGE_AUTHORITY) to treeId
-      }
-    }
-    val docId = runCatching { DocumentsContract.getDocumentId(fileUri) }.getOrNull()
-      ?: parentIdFromEncodedPath(fileUri)
-      ?: return null
-    val parentId = docIdParentId(docId) ?: return null
-    val authority = fileUri.authority ?: EXTERNAL_STORAGE_AUTHORITY
-    return authority to parentId
+    else -> null
   }
 
-  /** Some file managers use non-standard content URIs; parse path segments. */
-  private fun parentIdFromEncodedPath(uri: Uri): String? {
-    val path = uri.path ?: return null
-    val decoded = Uri.decode(path)
-    val primary = primaryDocIdFromRelativePath(decoded) ?: return null
-    return primary
-  }
-
-  private fun parentIdFromFileUri(fileUri: Uri): Pair<String, String>? {
-    val path = fileUri.path ?: return null
-    val relative = pathToPrimaryRelative(path) ?: return null
-    val parentId = docIdParentId("primary:$relative") ?: return null
-    return EXTERNAL_STORAGE_AUTHORITY to parentId
-  }
-
-  private fun docIdParentId(docId: String): String? {
-    val slash = docId.lastIndexOf('/')
-    if (slash <= 0) return null
-    return docId.substring(0, slash)
-  }
-
+  /** Maps an absolute primary-storage path to its relative form (without the prefix). */
   private fun pathToPrimaryRelative(absolutePath: String): String? {
     val prefixes = listOf(
       Environment.getExternalStorageDirectory().absolutePath,
@@ -154,26 +129,23 @@ object VideoFolder {
     )
     for (prefix in prefixes) {
       if (absolutePath.startsWith(prefix)) {
-        val rel = absolutePath.removePrefix(prefix).trimStart('/')
-        if (rel.isNotEmpty()) return rel
+        return absolutePath.removePrefix(prefix).trimStart('/')
       }
     }
     return null
   }
 
-  private fun primaryDocIdFromRelativePath(path: String): String? {
-    val trimmed = path.trimStart('/')
-    if (trimmed.isEmpty()) return null
-    val rel = when {
-      trimmed.startsWith("document/") -> {
-        val after = trimmed.removePrefix("document/")
-        Uri.decode(after)
-      }
-      trimmed.startsWith("tree/") -> return null
-      else -> trimmed
-    }
-    return if (rel.contains(':')) rel else "primary:$rel"
+  private fun docIdParent(docId: String): String? {
+    val slash = docId.lastIndexOf('/')
+    if (slash <= 0) return null
+    return docId.substring(0, slash)
   }
+
+  private fun buildTreeUri(authority: String, docId: String): Uri? =
+    runCatching { DocumentsContract.buildTreeDocumentUri(authority, docId) }.getOrNull()
+
+  private fun buildDocUri(authority: String, docId: String): Uri? =
+    runCatching { DocumentsContract.buildDocumentUri(authority, docId) }.getOrNull()
 
   /** Reads the display name of an arbitrary content/file [uri], or null. */
   fun displayNameOf(context: Context, uri: Uri): String? {
