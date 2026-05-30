@@ -1,13 +1,15 @@
 package com.stulluk.simpleplayer
 
+import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.ActivityInfo
 import android.net.Uri
 import android.os.Bundle
+import android.provider.DocumentsContract
 import android.view.View
 import android.widget.Toast
-import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.result.contract.ActivityResultContract
 import androidx.annotation.DrawableRes
 import androidx.appcompat.app.AppCompatActivity
 import androidx.media3.common.MediaItem
@@ -49,8 +51,28 @@ class PlayerActivity : AppCompatActivity() {
   /** Current orientation override mode; persisted across launches. */
   private var orientationMode: Int = MODE_AUTO
 
+  /**
+   * System folder picker with [DocumentsContract.EXTRA_INITIAL_URI]. Adds read
+   * grant on the hint so Samsung DocumentsUI can open that folder instead of
+   * defaulting to DCIM/Camera.
+   */
   private val openFolder = registerForActivityResult(
-    ActivityResultContracts.OpenDocumentTree(),
+    object : ActivityResultContract<Uri?, Uri?>() {
+      override fun createIntent(context: Context, input: Uri?): Intent =
+        Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
+          addCategory(Intent.CATEGORY_DEFAULT)
+          input?.let { hint ->
+            putExtra(DocumentsContract.EXTRA_INITIAL_URI, hint)
+            addFlags(
+              Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+            )
+          }
+        }
+
+      override fun parseResult(resultCode: Int, intent: Intent?): Uri? =
+        intent?.data?.takeIf { resultCode == RESULT_OK }
+    },
   ) { uri -> if (uri != null) onFolderPicked(uri) }
 
   override fun onCreate(savedInstanceState: Bundle?) {
@@ -61,7 +83,8 @@ class PlayerActivity : AppCompatActivity() {
 
     binding.emptyPickButton.setOnClickListener { launchFolderPicker(null) }
     binding.folderButton.setOnClickListener {
-      launchFolderPicker(pendingSingleUri?.let { VideoFolder.initialFolderHint(this, it) })
+      val hints = pendingSingleUri?.let { VideoFolder.initialFolderHints(this, it) }.orEmpty()
+      launchFolderPicker(hints.firstOrNull())
     }
     binding.rotateButton.setOnClickListener { cycleOrientationMode() }
 
@@ -128,8 +151,9 @@ class PlayerActivity : AppCompatActivity() {
     playSingleExternalVideo(uri, name)
     if (offerFolderGrant && !folderPickerAutoLaunched) {
       folderPickerAutoLaunched = true
-      val hint = VideoFolder.initialFolderHint(this, uri)
-      binding.playerView.post { launchFolderPicker(hint) }
+      val hints = VideoFolder.initialFolderHints(this, uri)
+      SafUriDebug.logOpenWith(this, uri, hints)
+      binding.playerView.post { launchFolderPicker(hints.firstOrNull()) }
     }
   }
 
