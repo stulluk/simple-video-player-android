@@ -68,13 +68,15 @@
     android:src="@android:drawable/ic_menu_more"
     android:visibility="gone" />
 
+  <!-- Centered directly under the prev/pause/next row of the Media3 controls.
+       The center playback row sits at the PlayerView's vertical center, so
+       offsetting this button downward by ~64dp places it just below that row. -->
   <ImageButton
     android:id="@+id/rotateButton"
     android:layout_width="48dp"
     android:layout_height="48dp"
-    android:layout_gravity="bottom|end"
-    android:layout_marginEnd="8dp"
-    android:layout_marginBottom="56dp"
+    android:layout_gravity="center"
+    android:layout_marginTop="64dp"
     android:background="?attr/selectableItemBackgroundBorderless"
     android:contentDescription="@string/rotate_button"
     android:padding="10dp"

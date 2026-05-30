@@ -54,6 +54,25 @@ object VideoFolder {
     return result.sortedWith(compareBy(NaturalOrderComparator) { it.name })
   }
 
+  /**
+   * Best-effort parent-folder URI for [DocumentsContract.EXTRA_INITIAL_URI] when
+   * opening the SAF tree picker after "Open with". Works for Storage Access
+   * Framework document URIs (e.g. from CX / EX File Explorer).
+   */
+  fun initialFolderHint(context: Context, fileUri: Uri): Uri? {
+    if (fileUri.scheme != "content") return null
+    if (!DocumentsContract.isDocumentUri(context, fileUri)) return null
+    val docId = runCatching { DocumentsContract.getDocumentId(fileUri) }.getOrNull()
+      ?: return null
+    val slash = docId.lastIndexOf('/')
+    if (slash <= 0) return null
+    val parentId = docId.substring(0, slash)
+    val authority = fileUri.authority ?: return null
+    return runCatching {
+      DocumentsContract.buildDocumentUri(authority, parentId)
+    }.getOrNull()
+  }
+
   /** Reads the display name of an arbitrary content/file [uri], or null. */
   fun displayNameOf(context: Context, uri: Uri): String? {
     if (uri.scheme == "file") return uri.lastPathSegment

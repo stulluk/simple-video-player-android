@@ -43,6 +43,9 @@ class PlayerActivity : AppCompatActivity() {
   /** A single externally-opened video that has no known folder yet. */
   private var pendingSingleUri: Uri? = null
 
+  /** True after we auto-opened the folder picker for the current pending file. */
+  private var folderPickerAutoLaunched = false
+
   /** Current orientation override mode; persisted across launches. */
   private var orientationMode: Int = MODE_AUTO
 
@@ -56,8 +59,10 @@ class PlayerActivity : AppCompatActivity() {
     setContentView(binding.root)
     prefs = getSharedPreferences("svp", MODE_PRIVATE)
 
-    binding.emptyPickButton.setOnClickListener { launchFolderPicker() }
-    binding.folderButton.setOnClickListener { launchFolderPicker() }
+    binding.emptyPickButton.setOnClickListener { launchFolderPicker(null) }
+    binding.folderButton.setOnClickListener {
+      launchFolderPicker(pendingSingleUri?.let { VideoFolder.initialFolderHint(this, it) })
+    }
     binding.rotateButton.setOnClickListener { cycleOrientationMode() }
 
     // Apply the persisted orientation mode before the window is laid out so the
@@ -107,16 +112,29 @@ class PlayerActivity : AppCompatActivity() {
   /**
    * Handles an externally opened video. If we already hold a SAF folder that
    * contains a file with the same name, we play the whole folder; otherwise we
-   * play just this file and hint that a folder can be granted for next/previous.
+   * play the file and open the SAF folder picker so the user can grant the
+   * folder in one tap (next/previous then works for every video in it).
    */
-  private fun openExternalVideo(uri: Uri) {
+  private fun openExternalVideo(uri: Uri, offerFolderGrant: Boolean = true) {
     val name = VideoFolder.displayNameOf(this, uri)
     val match = name?.let { findFolderContaining(it) }
     if (match != null) {
       pendingSingleUri = null
+      folderPickerAutoLaunched = false
       startPlaylist(match.videos, match.index, 0L)
       return
     }
+    if (pendingSingleUri != uri) folderPickerAutoLaunched = false
+    playSingleExternalVideo(uri, name)
+    if (offerFolderGrant && !folderPickerAutoLaunched) {
+      folderPickerAutoLaunched = true
+      val hint = VideoFolder.initialFolderHint(this, uri)
+      binding.playerView.post { launchFolderPicker(hint) }
+    }
+  }
+
+  /** Plays one file with no folder playlist (next/prev disabled until SAF grant). */
+  private fun playSingleExternalVideo(uri: Uri, name: String?) {
     pendingSingleUri = uri
     playlist = emptyList()
     startIndex = 0
@@ -126,11 +144,10 @@ class PlayerActivity : AppCompatActivity() {
     binding.titleText.text = name ?: ""
     initPlayer()
     player?.apply {
-      setMediaItem(buildMediaItem(VideoItem(uri, name ?: "")))
+      setMediaItems(listOf(buildMediaItem(VideoItem(uri, name ?: ""))))
       prepare()
       playWhenReady = true
     }
-    Toast.makeText(this, R.string.enable_next_hint, Toast.LENGTH_LONG).show()
   }
 
   private data class FolderMatch(val videos: List<VideoItem>, val index: Int)
@@ -146,8 +163,8 @@ class PlayerActivity : AppCompatActivity() {
     return null
   }
 
-  private fun launchFolderPicker() {
-    runCatching { openFolder.launch(null) }
+  private fun launchFolderPicker(initialUri: Uri? = null) {
+    runCatching { openFolder.launch(initialUri) }
       .onFailure { Toast.makeText(this, R.string.no_videos, Toast.LENGTH_SHORT).show() }
   }
 
@@ -169,6 +186,7 @@ class PlayerActivity : AppCompatActivity() {
       return
     }
     pendingSingleUri = null
+    folderPickerAutoLaunched = false
     val index = preferredName?.let { name -> videos.indexOfFirst { it.name == name } }
       ?.takeIf { it >= 0 } ?: 0
     startPlaylist(videos, index, 0L)
@@ -273,7 +291,10 @@ class PlayerActivity : AppCompatActivity() {
       if (playlist.isNotEmpty()) {
         startPlaylist(playlist, startIndex, startPositionMs)
       } else {
-        pendingSingleUri?.let { openExternalVideo(it) }
+        pendingSingleUri?.let { uri ->
+          val name = VideoFolder.displayNameOf(this, uri)
+          playSingleExternalVideo(uri, name)
+        }
       }
     }
   }
