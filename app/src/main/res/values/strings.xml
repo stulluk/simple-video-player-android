@@ -5,6 +5,7 @@
   <string name="empty_hint">No video selected.\nPick a folder, or open a video from a file manager.</string>
   <string name="enable_next_hint">Tap the folder button and grant this folder to enable next/previous.</string>
   <string name="folder_button">Choose folder</string>
+  <string name="rotate_button">Rotation mode</string>
   <string name="no_videos">No playable videos found in this folder.</string>
   <string name="playback_error">Cannot play this video.</string>
 </resources>

@@ -2,11 +2,13 @@ package com.stulluk.simpleplayer
 
 import android.content.Intent
 import android.content.SharedPreferences
+import android.content.pm.ActivityInfo
 import android.net.Uri
 import android.os.Bundle
 import android.view.View
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.annotation.DrawableRes
 import androidx.appcompat.app.AppCompatActivity
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
@@ -41,6 +43,9 @@ class PlayerActivity : AppCompatActivity() {
   /** A single externally-opened video that has no known folder yet. */
   private var pendingSingleUri: Uri? = null
 
+  /** Current orientation override mode; persisted across launches. */
+  private var orientationMode: Int = MODE_AUTO
+
   private val openFolder = registerForActivityResult(
     ActivityResultContracts.OpenDocumentTree(),
   ) { uri -> if (uri != null) onFolderPicked(uri) }
@@ -53,12 +58,21 @@ class PlayerActivity : AppCompatActivity() {
 
     binding.emptyPickButton.setOnClickListener { launchFolderPicker() }
     binding.folderButton.setOnClickListener { launchFolderPicker() }
+    binding.rotateButton.setOnClickListener { cycleOrientationMode() }
+
+    // Apply the persisted orientation mode before the window is laid out so the
+    // system does not flash the wrong orientation on launch.
+    orientationMode = prefs.getInt(KEY_ORIENT, MODE_AUTO)
+    applyOrientationMode()
+    refreshRotateIcon()
 
     binding.playerView.setControllerVisibilityListener(
       androidx.media3.ui.PlayerView.ControllerVisibilityListener { visibility ->
-        // Keep the overlay chrome (folder button + title) in sync with controls.
+        // Keep the overlay chrome (folder/rotate buttons + title) in sync with controls.
         val hasContent = playlist.isNotEmpty() || pendingSingleUri != null
-        binding.folderButton.visibility = if (hasContent) visibility else View.GONE
+        val gated = if (hasContent) visibility else View.GONE
+        binding.folderButton.visibility = gated
+        binding.rotateButton.visibility = gated
         binding.titleText.visibility =
           if (hasContent && binding.titleText.text.isNotEmpty()) visibility else View.GONE
       },
@@ -183,7 +197,38 @@ class PlayerActivity : AppCompatActivity() {
   private fun showEmptyState() {
     binding.emptyState.visibility = View.VISIBLE
     binding.folderButton.visibility = View.GONE
+    binding.rotateButton.visibility = View.GONE
     binding.titleText.visibility = View.GONE
+  }
+
+  /**
+   * Cycles through AUTO -> force landscape -> force portrait -> AUTO. AUTO uses
+   * [ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR], which intentionally overrides
+   * the user's system-wide rotation lock for this activity only, so a sideways
+   * phone still produces a landscape video.
+   */
+  private fun cycleOrientationMode() {
+    orientationMode = (orientationMode + 1) % 3
+    prefs.edit().putInt(KEY_ORIENT, orientationMode).apply()
+    applyOrientationMode()
+    refreshRotateIcon()
+  }
+
+  private fun applyOrientationMode() {
+    requestedOrientation = when (orientationMode) {
+      MODE_LANDSCAPE -> ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+      MODE_PORTRAIT -> ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
+      else -> ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR
+    }
+  }
+
+  private fun refreshRotateIcon() {
+    @DrawableRes val icon = when (orientationMode) {
+      MODE_LANDSCAPE -> R.drawable.ic_orient_landscape
+      MODE_PORTRAIT -> R.drawable.ic_orient_portrait
+      else -> R.drawable.ic_orient_auto
+    }
+    binding.rotateButton.setImageResource(icon)
   }
 
   private fun initPlayer() {
@@ -250,5 +295,10 @@ class PlayerActivity : AppCompatActivity() {
 
   companion object {
     private const val KEY_FOLDER = "last_folder_uri"
+    private const val KEY_ORIENT = "orientation_mode"
+
+    private const val MODE_AUTO = 0
+    private const val MODE_LANDSCAPE = 1
+    private const val MODE_PORTRAIT = 2
   }
 }

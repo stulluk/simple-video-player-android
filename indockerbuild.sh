@@ -7,6 +7,7 @@ BUILD_TYPE="${1:-debug}"
 IMAGE_NAME="simple-video-player-builder:latest"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CACHE_DIR="$SCRIPT_DIR/.gradle-cache"
+ANDROID_USER_DIR="$SCRIPT_DIR/.android-cache"
 
 case "$BUILD_TYPE" in
   debug) GRADLE_TASK="assembleDebug" ;;
@@ -14,11 +15,15 @@ case "$BUILD_TYPE" in
   *) echo "Unknown build type: $BUILD_TYPE (use debug or release)"; exit 1 ;;
 esac
 
-mkdir -p "$CACHE_DIR"
+mkdir -p "$CACHE_DIR" "$ANDROID_USER_DIR"
 
+# Persist the auto-generated debug keystore (~/.android/debug.keystore) across
+# container runs so that successive debug APKs share the same signature and can
+# be installed with `adb install -r` without uninstalling first.
 docker run --rm \
   -v "$SCRIPT_DIR:/workspace" \
   -v "$CACHE_DIR:/home/builder/.gradle" \
+  -v "$ANDROID_USER_DIR:/home/builder/.android" \
   -w /workspace \
   "$IMAGE_NAME" \
   bash -c "gradle wrapper --gradle-version 8.9 --no-daemon >/dev/null 2>&1 || true; gradle $GRADLE_TASK --no-daemon --stacktrace"

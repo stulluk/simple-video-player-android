@@ -68,4 +68,17 @@
     android:src="@android:drawable/ic_menu_more"
     android:visibility="gone" />
 
+  <ImageButton
+    android:id="@+id/rotateButton"
+    android:layout_width="48dp"
+    android:layout_height="48dp"
+    android:layout_gravity="bottom|end"
+    android:layout_marginEnd="8dp"
+    android:layout_marginBottom="56dp"
+    android:background="?attr/selectableItemBackgroundBorderless"
+    android:contentDescription="@string/rotate_button"
+    android:padding="10dp"
+    android:src="@drawable/ic_orient_auto"
+    android:visibility="gone" />
+
 </FrameLayout>

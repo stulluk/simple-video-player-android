@@ -1,5 +1,6 @@
 .gradle/
 .gradle-cache/
+.android-cache/
 build/
 app/build/
 local.properties
