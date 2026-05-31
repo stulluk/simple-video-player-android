@@ -4,15 +4,31 @@ plugins {
 }
 
 android {
-  namespace = "com.stulluk.simpleplayer"
+  namespace = "com.drejo.androidvideoplayer"
   compileSdk = 35
 
   defaultConfig {
-    applicationId = "com.stulluk.simpleplayer"
+    applicationId = "com.drejo.androidvideoplayer"
     minSdk = 29
     targetSdk = 35
     versionCode = 1
     versionName = "1.0.0"
+  }
+
+  // Two flavors share the same code; the "fdroid" flavor adds the
+  // MANAGE_EXTERNAL_STORAGE permission via its dedicated manifest fragment.
+  flavorDimensions += "distribution"
+  productFlavors {
+    create("play") {
+      dimension = "distribution"
+    }
+    create("fdroid") {
+      dimension = "distribution"
+      // Different applicationId so users can keep both variants installed
+      // side by side; useful while we wait for the Play review.
+      applicationIdSuffix = ".fdroid"
+      versionNameSuffix = "-fdroid"
+    }
   }
 
   buildTypes {
@@ -37,6 +53,7 @@ android {
 
   buildFeatures {
     viewBinding = true
+    buildConfig = true
   }
 
   dependenciesInfo {

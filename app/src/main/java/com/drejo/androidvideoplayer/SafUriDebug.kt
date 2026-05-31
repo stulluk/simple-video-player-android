@@ -1,4 +1,4 @@
-package com.stulluk.simpleplayer
+package com.drejo.androidvideoplayer
 
 import android.content.Context
 import android.net.Uri
@@ -7,7 +7,7 @@ import android.util.Log
 
 /** Logs incoming content URIs to diagnose SAF folder-picker initial location. */
 object SafUriDebug {
-  private const val TAG = "SVP_URI"
+  private const val TAG = "DREJO_URI"
 
   fun logOpenWith(context: Context, fileUri: Uri, hints: List<Uri>) {
     val docId = runCatching { DocumentsContract.getDocumentId(fileUri) }.getOrNull()

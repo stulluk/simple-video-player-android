@@ -1,4 +1,4 @@
-package com.stulluk.simpleplayer
+package com.drejo.androidvideoplayer
 
 import android.content.Context
 import android.content.Intent
@@ -11,6 +11,7 @@ import android.view.View
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContract
 import androidx.annotation.DrawableRes
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
@@ -18,17 +19,23 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
-import com.stulluk.simpleplayer.databinding.ActivityPlayerBinding
+import com.drejo.androidvideoplayer.databinding.ActivityPlayerBinding
+import java.io.File
 
 /**
- * Single-screen video player. It can be started three ways:
- *  - from the launcher (resumes the last picked folder, or asks to pick one);
- *  - via "Open with" from a file manager (plays the file and, if the folder is
- *    known, enables next/previous across every video in it);
- *  - via the in-app folder picker.
+ * Single-screen video player. The activity is launched from three places:
+ *  - the launcher (resumes the last folder if any);
+ *  - "Open with" from a file manager;
+ *  - the in-app folder picker (Play flavor only path that triggers SAF).
  *
- * The whole point of the app is reliable next/previous navigation across mixed
- * mp4 + mkv folders, which ExoPlayer's playlist handles natively.
+ * The whole point of the app is reliable next/previous navigation across
+ * mixed mp4 + mkv folders, which ExoPlayer's playlist handles natively.
+ *
+ * The build has two flavors:
+ *  - **play** uses SAF exclusively (no dangerous permissions).
+ *  - **fdroid** can additionally request `MANAGE_EXTERNAL_STORAGE`, which
+ *    enables direct filesystem access and makes "Open with" navigation work
+ *    for hidden / non-MediaStore folders without any further prompts.
  */
 @UnstableApi
 class PlayerActivity : AppCompatActivity() {
@@ -48,10 +55,12 @@ class PlayerActivity : AppCompatActivity() {
   /** Current orientation override mode; persisted across launches. */
   private var orientationMode: Int = MODE_AUTO
 
+  private val isFdroidFlavor: Boolean get() = BuildConfig.FLAVOR == "fdroid"
+
   /**
    * System folder picker with [DocumentsContract.EXTRA_INITIAL_URI]. Adds read
-   * grant on the hint so Samsung DocumentsUI can open that folder instead of
-   * defaulting to DCIM/Camera.
+   * grant on the hint so DocumentsUI can open that folder when the OEM honours
+   * the hint (Samsung's DocumentsUI does not, but other vendors do).
    */
   private val openFolder = registerForActivityResult(
     object : ActivityResultContract<Uri?, Uri?>() {
@@ -70,31 +79,25 @@ class PlayerActivity : AppCompatActivity() {
       override fun parseResult(resultCode: Int, intent: Intent?): Uri? =
         intent?.data?.takeIf { resultCode == RESULT_OK }
     },
-  ) { uri -> if (uri != null) onFolderPicked(uri) }
+  ) { uri -> if (uri != null) onSafFolderPicked(uri) }
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
     binding = ActivityPlayerBinding.inflate(layoutInflater)
     setContentView(binding.root)
-    prefs = getSharedPreferences("svp", MODE_PRIVATE)
+    prefs = getSharedPreferences("drejo", MODE_PRIVATE)
 
-    binding.emptyPickButton.setOnClickListener { launchFolderPicker(null) }
-    binding.folderButton.setOnClickListener {
-      val hints = pendingSingleUri?.let { VideoFolder.initialFolderHints(this, it) }.orEmpty()
-      launchFolderPicker(hints.firstOrNull())
-    }
+    binding.emptyPickButton.setOnClickListener { onEmptyStatePrimaryAction() }
+    binding.folderButton.setOnClickListener { onFolderButtonClicked() }
     binding.rotateButton.setOnClickListener { cycleOrientationMode() }
-    binding.folderGrantBanner.setOnClickListener { requestFolderGrant() }
+    binding.folderGrantBanner.setOnClickListener { onBannerClicked() }
 
-    // Apply the persisted orientation mode before the window is laid out so the
-    // system does not flash the wrong orientation on launch.
     orientationMode = prefs.getInt(KEY_ORIENT, MODE_AUTO)
     applyOrientationMode()
     refreshRotateIcon()
 
     binding.playerView.setControllerVisibilityListener(
       androidx.media3.ui.PlayerView.ControllerVisibilityListener { visibility ->
-        // Keep the overlay chrome (folder/rotate buttons + title) in sync with controls.
         val hasContent = playlist.isNotEmpty() || pendingSingleUri != null
         val gated = if (hasContent) visibility else View.GONE
         binding.folderButton.visibility = gated
@@ -102,11 +105,12 @@ class PlayerActivity : AppCompatActivity() {
         binding.titleText.visibility =
           if (hasContent && binding.titleText.text.isNotEmpty()) visibility else View.GONE
         binding.folderGrantBanner.visibility =
-          if (pendingSingleUri != null) View.VISIBLE else View.GONE
+          if (showBanner()) visibility else View.GONE
       },
     )
 
     handleIntent(intent, fromNewIntent = false)
+    maybePromptAllFilesAccessOnFirstRun()
   }
 
   override fun onNewIntent(intent: Intent) {
@@ -119,7 +123,7 @@ class PlayerActivity : AppCompatActivity() {
   private fun handleIntent(intent: Intent?, fromNewIntent: Boolean) {
     val data = intent?.data
     android.util.Log.i(
-      "SVP_URI",
+      "DREJO_URI",
       "handleIntent fromNewIntent=$fromNewIntent action=${intent?.action} " +
         "data=$data type=${intent?.type} extras=${intent?.extras?.keySet()}",
     )
@@ -128,35 +132,67 @@ class PlayerActivity : AppCompatActivity() {
       return
     }
     if (fromNewIntent && playlist.isNotEmpty()) return
-    // Launcher start: resume the last folder if we still hold permission.
+
+    if (isFdroidFlavor && AllFilesAccess.isGranted) {
+      val savedDir = prefs.getString(KEY_FILE_FOLDER, null)?.let(::File)
+      if (savedDir != null && savedDir.isDirectory) {
+        val videos = VideoFolder.listVideosFromDirectory(savedDir)
+        if (videos.isNotEmpty()) {
+          startPlaylist(videos, 0, 0L)
+          return
+        }
+      }
+      showEmptyState()
+      return
+    }
+
     val saved = prefs.getString(KEY_FOLDER, null)?.let(Uri::parse)
     if (saved != null && hasPersistedPermission(saved)) {
-      loadFolder(saved, preferredName = null)
+      loadSafFolder(saved, preferredName = null)
     } else {
       showEmptyState()
     }
   }
 
   /**
-   * Handles an externally opened video. If we already hold a SAF folder that
-   * contains a file with the same name, we play the whole folder; otherwise we
-   * play the file and show a banner so the user can grant the folder when ready
-   * (Samsung often ignores EXTRA_INITIAL_URI and opens DCIM instead).
+   * Handles an externally opened video. The behaviour depends on the flavor and
+   * on whether we already hold a folder grant (SAF or all-files):
+   *  - F-Droid + all-files: list the parent directory directly via [File].
+   *  - SAF folder already granted that contains this filename: replay folder.
+   *  - Otherwise: play just this file and offer a grant via the banner.
    */
   private fun openExternalVideo(uri: Uri) {
     val name = VideoFolder.displayNameOf(this, uri)
-    val match = name?.let { findFolderContaining(it) }
+
+    if (isFdroidFlavor && AllFilesAccess.isGranted) {
+      val absPath = VideoFolder.absolutePathFromUri(uri)
+      val parentDir = absPath?.let(::File)?.parentFile
+      if (parentDir != null && parentDir.isDirectory) {
+        val videos = VideoFolder.listVideosFromDirectory(parentDir)
+        if (videos.isNotEmpty()) {
+          val index = videos.indexOfFirst { it.name == name }.coerceAtLeast(0)
+          pendingSingleUri = null
+          binding.folderGrantBanner.visibility = View.GONE
+          prefs.edit().putString(KEY_FILE_FOLDER, parentDir.absolutePath).apply()
+          startPlaylist(videos, index, 0L)
+          return
+        }
+      }
+    }
+
+    val match = name?.let { findSafFolderContaining(it) }
     if (match != null) {
       pendingSingleUri = null
       startPlaylist(match.videos, match.index, 0L)
       return
     }
+
     val hints = VideoFolder.initialFolderHints(this, uri)
     SafUriDebug.logOpenWith(this, uri, hints)
     playSingleExternalVideo(uri, name)
   }
 
-  /** Plays one file with no folder playlist (next/prev disabled until SAF grant). */
+  /** Plays one file with no folder playlist (next/prev disabled until a grant). */
   private fun playSingleExternalVideo(uri: Uri, name: String?) {
     pendingSingleUri = uri
     playlist = emptyList()
@@ -175,6 +211,8 @@ class PlayerActivity : AppCompatActivity() {
     setupTransportOverrides()
   }
 
+  private fun showBanner(): Boolean = pendingSingleUri != null && playlist.isEmpty()
+
   private fun updateFolderGrantBanner() {
     val uri = pendingSingleUri
     if (uri == null) {
@@ -182,27 +220,82 @@ class PlayerActivity : AppCompatActivity() {
       return
     }
     val folderName = VideoFolder.folderDisplayNameFromUri(uri)
-    binding.folderGrantBanner.text =
+    val msg = if (isFdroidFlavor) {
       if (folderName != null) {
-        getString(R.string.folder_grant_banner_named, folderName)
+        getString(R.string.banner_fdroid_named, folderName)
       } else {
-        getString(R.string.folder_grant_banner_generic)
+        getString(R.string.banner_fdroid_generic)
       }
+    } else {
+      if (folderName != null) {
+        getString(R.string.banner_play_named, folderName)
+      } else {
+        getString(R.string.banner_play_generic)
+      }
+    }
+    binding.folderGrantBanner.text = msg
     binding.folderGrantBanner.visibility = View.VISIBLE
   }
 
-  private fun needsFolderGrant(): Boolean = pendingSingleUri != null && playlist.isEmpty()
+  private fun onBannerClicked() {
+    if (isFdroidFlavor) {
+      showAllFilesAccessDialog()
+    } else {
+      requestSafFolderGrant()
+    }
+  }
 
-  private fun requestFolderGrant() {
+  private fun onEmptyStatePrimaryAction() {
+    if (isFdroidFlavor && !AllFilesAccess.isGranted) {
+      showAllFilesAccessDialog()
+    } else {
+      launchSafFolderPicker(null)
+    }
+  }
+
+  private fun onFolderButtonClicked() {
+    if (isFdroidFlavor && AllFilesAccess.isGranted) return
+    val hints = pendingSingleUri?.let { VideoFolder.initialFolderHints(this, it) }.orEmpty()
+    launchSafFolderPicker(hints.firstOrNull())
+  }
+
+  private fun maybePromptAllFilesAccessOnFirstRun() {
+    if (!isFdroidFlavor) return
+    if (AllFilesAccess.isGranted) return
+    if (prefs.getBoolean(KEY_ALL_FILES_DIALOG_DISMISSED, false)) return
+    showAllFilesAccessDialog()
+  }
+
+  private fun showAllFilesAccessDialog() {
+    AlertDialog.Builder(this)
+      .setTitle(R.string.all_files_dialog_title)
+      .setMessage(R.string.all_files_dialog_message)
+      .setPositiveButton(R.string.all_files_dialog_open) { _, _ ->
+        AllFilesAccess.openSettings(this)
+      }
+      .setNegativeButton(R.string.all_files_dialog_skip) { dialog, _ ->
+        prefs.edit().putBoolean(KEY_ALL_FILES_DIALOG_DISMISSED, true).apply()
+        dialog.dismiss()
+      }
+      .setCancelable(true)
+      .show()
+  }
+
+  private fun requestSafFolderGrant() {
     val uri = pendingSingleUri ?: return
     val hints = VideoFolder.initialFolderHints(this, uri)
-    launchFolderPicker(hints.firstOrNull())
+    launchSafFolderPicker(hints.firstOrNull())
+  }
+
+  private fun launchSafFolderPicker(initialUri: Uri? = null) {
+    runCatching { openFolder.launch(initialUri) }
+      .onFailure { Toast.makeText(this, R.string.no_videos, Toast.LENGTH_SHORT).show() }
   }
 
   private data class FolderMatch(val videos: List<VideoItem>, val index: Int)
 
-  /** Searches every persisted folder for a video whose name matches [fileName]. */
-  private fun findFolderContaining(fileName: String): FolderMatch? {
+  /** Searches every persisted SAF folder for a video whose name matches [fileName]. */
+  private fun findSafFolderContaining(fileName: String): FolderMatch? {
     for (perm in contentResolver.persistedUriPermissions) {
       if (!perm.isReadPermission) continue
       val videos = VideoFolder.listVideos(this, perm.uri)
@@ -212,22 +305,15 @@ class PlayerActivity : AppCompatActivity() {
     return null
   }
 
-  private fun launchFolderPicker(initialUri: Uri? = null) {
-    runCatching { openFolder.launch(initialUri) }
-      .onFailure { Toast.makeText(this, R.string.no_videos, Toast.LENGTH_SHORT).show() }
-  }
-
-  private fun onFolderPicked(uri: Uri) {
+  private fun onSafFolderPicked(uri: Uri) {
     val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION
     runCatching { contentResolver.takePersistableUriPermission(uri, flags) }
     prefs.edit().putString(KEY_FOLDER, uri.toString()).apply()
-    // If a single external file is currently playing, try to resume it within
-    // the newly granted folder so navigation continues from the same video.
     val currentName = pendingSingleUri?.let { VideoFolder.displayNameOf(this, it) }
-    loadFolder(uri, preferredName = currentName)
+    loadSafFolder(uri, preferredName = currentName)
   }
 
-  private fun loadFolder(treeUri: Uri, preferredName: String?) {
+  private fun loadSafFolder(treeUri: Uri, preferredName: String?) {
     val videos = VideoFolder.listVideos(this, treeUri)
     if (videos.isEmpty()) {
       Toast.makeText(this, R.string.no_videos, Toast.LENGTH_LONG).show()
@@ -267,6 +353,10 @@ class PlayerActivity : AppCompatActivity() {
     binding.rotateButton.visibility = View.GONE
     binding.titleText.visibility = View.GONE
     binding.folderGrantBanner.visibility = View.GONE
+    binding.emptyPickButton.setText(
+      if (isFdroidFlavor && !AllFilesAccess.isGranted) R.string.grant_all_files
+      else R.string.pick_folder,
+    )
   }
 
   /**
@@ -312,7 +402,6 @@ class PlayerActivity : AppCompatActivity() {
 
       override fun onPlayerError(error: PlaybackException) {
         Toast.makeText(this@PlayerActivity, R.string.playback_error, Toast.LENGTH_SHORT).show()
-        // Skip a single broken file instead of getting stuck on it.
         val p = player ?: return
         if (p.hasNextMediaItem()) {
           p.seekToNextMediaItem()
@@ -325,18 +414,18 @@ class PlayerActivity : AppCompatActivity() {
   }
 
   /**
-   * When only one file is open without a SAF folder grant, next/previous opens
-   * the folder picker instead of doing nothing.
+   * When only one file is open without a folder grant, next/previous opens the
+   * grant flow (SAF picker or all-files dialog) instead of doing nothing.
    */
   private fun setupTransportOverrides() {
     binding.playerView.post {
       val next = binding.playerView.findViewById<View>(androidx.media3.ui.R.id.exo_next)
       val prev = binding.playerView.findViewById<View>(androidx.media3.ui.R.id.exo_prev)
       next?.setOnClickListener {
-        if (needsFolderGrant()) requestFolderGrant() else player?.seekToNext()
+        if (showBanner()) onBannerClicked() else player?.seekToNext()
       }
       prev?.setOnClickListener {
-        if (needsFolderGrant()) requestFolderGrant() else player?.seekToPrevious()
+        if (showBanner()) onBannerClicked() else player?.seekToPrevious()
       }
     }
   }
@@ -354,18 +443,28 @@ class PlayerActivity : AppCompatActivity() {
 
   override fun onStart() {
     super.onStart()
-    // Re-create the player when returning to the foreground.
     if (player == null && (playlist.isNotEmpty() || pendingSingleUri != null)) {
       if (playlist.isNotEmpty()) {
         startPlaylist(playlist, startIndex, startPositionMs)
       } else {
         pendingSingleUri?.let { uri ->
-          val name = VideoFolder.displayNameOf(this, uri)
-          playSingleExternalVideo(uri, name)
-          updateFolderGrantBanner()
+          // Re-evaluate now that we may have just been granted all-files access.
+          openExternalVideo(uri)
         }
       }
     }
+  }
+
+  override fun onResume() {
+    super.onResume()
+    // Returning from the all-files settings page may have flipped the toggle.
+    if (isFdroidFlavor && AllFilesAccess.isGranted) {
+      binding.folderGrantBanner.visibility = View.GONE
+      pendingSingleUri?.let { openExternalVideo(it) }
+    }
+    // Refresh the empty-state primary button label (its text depends on the
+    // current permission state).
+    if (binding.emptyState.visibility == View.VISIBLE) showEmptyState()
   }
 
   override fun onStop() {
@@ -385,7 +484,9 @@ class PlayerActivity : AppCompatActivity() {
 
   companion object {
     private const val KEY_FOLDER = "last_folder_uri"
+    private const val KEY_FILE_FOLDER = "last_file_folder"
     private const val KEY_ORIENT = "orientation_mode"
+    private const val KEY_ALL_FILES_DIALOG_DISMISSED = "all_files_dialog_dismissed"
 
     private const val MODE_AUTO = 0
     private const val MODE_LANDSCAPE = 1

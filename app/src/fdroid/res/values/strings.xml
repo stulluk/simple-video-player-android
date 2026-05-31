@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <!-- Visible suffix so the user can tell the F-Droid build apart from a
+       potential Play build installed side by side (different applicationId). -->
+  <string name="app_name">drejo player (FOSS)</string>
+</resources>

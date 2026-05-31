@@ -1,12 +1,24 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-  <string name="app_name">Simple Video Player</string>
+  <string name="app_name">drejo player</string>
   <string name="pick_folder">Pick a folder</string>
-  <string name="empty_hint">No video selected.\nPick a folder, or open a video from a file manager.</string>
+  <string name="grant_all_files">Grant all-files access</string>
+  <string name="empty_hint">No video selected.\nOpen a video from a file manager, or pick a folder.</string>
   <string name="folder_button">Choose folder</string>
   <string name="rotate_button">Rotation mode</string>
   <string name="no_videos">No playable videos found in this folder.</string>
   <string name="playback_error">Cannot play this video.</string>
-  <string name="folder_grant_banner_named">Tap to enable next/previous in folder: %1$s</string>
-  <string name="folder_grant_banner_generic">Tap to enable next/previous in this folder</string>
+
+  <!-- Banner shown while a single externally-opened video is playing without
+       a folder grant. Tapping the banner opens the appropriate grant flow. -->
+  <string name="banner_play_named">Tap to enable next/previous in folder: %1$s</string>
+  <string name="banner_play_generic">Tap to enable next/previous in this folder</string>
+  <string name="banner_fdroid_named">Grant all-files access for next/previous in: %1$s</string>
+  <string name="banner_fdroid_generic">Grant all-files access for next/previous</string>
+
+  <!-- F-Droid first-run dialog (Play flavor never shows it). -->
+  <string name="all_files_dialog_title">All files access</string>
+  <string name="all_files_dialog_message">drejo player needs access to all files on your device to navigate between videos in any folder, including hidden ones.\n\nThis permission is used only to list and play videos; nothing is uploaded, shared, or modified.</string>
+  <string name="all_files_dialog_open">Open settings</string>
+  <string name="all_files_dialog_skip">Not now</string>
 </resources>

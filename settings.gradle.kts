@@ -20,5 +20,5 @@ dependencyResolutionManagement {
   }
 }
 
-rootProject.name = "SimpleVideoPlayer"
+rootProject.name = "DrejoPlayer"
 include(":app")

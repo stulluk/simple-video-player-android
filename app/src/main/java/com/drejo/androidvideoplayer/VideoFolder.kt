@@ -1,19 +1,25 @@
-package com.stulluk.simpleplayer
+package com.drejo.androidvideoplayer
 
 import android.content.Context
 import android.net.Uri
 import android.os.Environment
 import android.provider.DocumentsContract
 import android.provider.OpenableColumns
+import androidx.core.net.toUri
+import java.io.File
 
 /** A single playable video entry: its content [uri] and display [name]. */
 data class VideoItem(val uri: Uri, val name: String)
 
 /**
- * Helpers for enumerating videos inside a folder selected via the Storage
- * Access Framework (SAF). This is intentionally codec-agnostic: every file that
- * looks like a video (mp4, mkv, etc.) is included so that "next/previous"
- * navigation never skips a Matroska file the way most players do.
+ * Helpers for enumerating videos. Two backends are supported:
+ *  - SAF (Storage Access Framework) tree URIs, used by both flavors.
+ *  - Direct filesystem access via [File], used by the F-Droid flavor when
+ *    the user has granted "All files access" (MANAGE_EXTERNAL_STORAGE).
+ *
+ * The folder listing is intentionally codec-agnostic: every file that looks
+ * like a video (mp4, mkv, etc.) is included so that "next/previous" navigation
+ * never skips a Matroska file the way most players do.
  */
 object VideoFolder {
 
@@ -21,6 +27,8 @@ object VideoFolder {
     "mp4", "mkv", "webm", "avi", "mov", "m4v", "3gp", "3g2", "ts", "m2ts",
     "mts", "flv", "wmv", "mpg", "mpeg", "ogv", "mxf", "vob",
   )
+
+  private const val EXTERNAL_STORAGE_AUTHORITY = "com.android.externalstorage.documents"
 
   /**
    * Lists every playable video inside the given SAF tree [treeUri], sorted by
@@ -55,17 +63,29 @@ object VideoFolder {
     return result.sortedWith(compareBy(NaturalOrderComparator) { it.name })
   }
 
-  private const val EXTERNAL_STORAGE_AUTHORITY = "com.android.externalstorage.documents"
+  /**
+   * Lists every playable video inside [directory] using direct filesystem
+   * access. This bypasses SAF entirely and is only safe when the app holds
+   * the MANAGE_EXTERNAL_STORAGE permission (F-Droid flavor only).
+   */
+  fun listVideosFromDirectory(directory: File): List<VideoItem> {
+    val files = runCatching { directory.listFiles() }.getOrNull() ?: return emptyList()
+    return files
+      .filter { it.isFile && isVideo(it.name, mime = "") }
+      .map { VideoItem(it.toUri(), it.name) }
+      .sortedWith(compareBy(NaturalOrderComparator) { it.name })
+  }
 
   /**
    * Parent-folder URIs for [DocumentsContract.EXTRA_INITIAL_URI], best first.
-   * [ACTION_OPEN_DOCUMENT_TREE] on Samsung/Android 16 often needs a **tree** URI,
-   * not only a document URI; several candidates are returned when possible.
+   * [Intent.ACTION_OPEN_DOCUMENT_TREE] on Samsung/Android 16 often needs a
+   * **tree** URI, not only a document URI; several candidates are returned
+   * when possible. (In practice Samsung still ignores this hint, but we keep
+   * it for vendors that honour it.)
    */
   fun initialFolderHints(context: Context, fileUri: Uri): List<Uri> {
     val out = linkedSetOf<Uri>()
 
-    // Path A: real DocumentsContract URI (Samsung's My Files, Files by Google, etc.).
     if (fileUri.scheme == "content" &&
       runCatching { DocumentsContract.isDocumentUri(context, fileUri) }.getOrDefault(false)
     ) {
@@ -81,12 +101,6 @@ object VideoFolder {
       }
     }
 
-    // Path B: anything we can map to an absolute path on primary storage
-    //   - file:// URIs
-    //   - third-party FileProvider URIs that embed the absolute path (e.g. CX
-    //     `content://.../root/storage/emulated/0/<rel>/<file>`).
-    // We always rebuild the hint against externalstorage so Samsung
-    // DocumentsUI accepts it instead of falling back to DCIM.
     absolutePathFromUri(fileUri)?.let { absPath ->
       pathToPrimaryRelative(absPath)?.let { rel ->
         val parentRel = rel.substringBeforeLast('/', "")
@@ -112,8 +126,12 @@ object VideoFolder {
     return parent.substringAfterLast('/')
   }
 
-  /** Returns an absolute on-disk path for [uri] when one is recoverable. */
-  private fun absolutePathFromUri(uri: Uri): String? = when (uri.scheme) {
+  /**
+   * Returns an absolute on-disk path for [uri] when one is recoverable.
+   * Public so the F-Droid flavor can resolve a file's parent directory and
+   * list it via direct filesystem access.
+   */
+  fun absolutePathFromUri(uri: Uri): String? = when (uri.scheme) {
     "file" -> uri.path
     "content" -> {
       val raw = uri.path ?: ""
