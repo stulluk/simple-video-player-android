@@ -71,6 +71,36 @@
   <!-- Centered directly under the prev/pause/next row of the Media3 controls.
        The center playback row sits at the PlayerView's vertical center, so
        offsetting this button downward by ~64dp places it just below that row. -->
+  <!-- Centred on each side, used to show the accumulated seek amount when
+       the user double-taps the left or right band of the screen. -->
+  <TextView
+    android:id="@+id/seekIndicatorLeft"
+    android:layout_width="wrap_content"
+    android:layout_height="wrap_content"
+    android:layout_gravity="start|center_vertical"
+    android:layout_marginStart="40dp"
+    android:background="#A0000000"
+    android:paddingHorizontal="18dp"
+    android:paddingVertical="10dp"
+    android:textColor="@android:color/white"
+    android:textSize="22sp"
+    android:textStyle="bold"
+    android:visibility="gone" />
+
+  <TextView
+    android:id="@+id/seekIndicatorRight"
+    android:layout_width="wrap_content"
+    android:layout_height="wrap_content"
+    android:layout_gravity="end|center_vertical"
+    android:layout_marginEnd="40dp"
+    android:background="#A0000000"
+    android:paddingHorizontal="18dp"
+    android:paddingVertical="10dp"
+    android:textColor="@android:color/white"
+    android:textSize="22sp"
+    android:textStyle="bold"
+    android:visibility="gone" />
+
   <TextView
     android:id="@+id/folderGrantBanner"
     android:layout_width="wrap_content"

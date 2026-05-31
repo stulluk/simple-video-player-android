@@ -1,12 +1,18 @@
 package com.drejo.androidvideoplayer
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.ActivityInfo
 import android.net.Uri
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
 import android.provider.DocumentsContract
+import android.view.GestureDetector
+import android.view.MotionEvent
 import android.view.View
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContract
@@ -55,6 +61,24 @@ class PlayerActivity : AppCompatActivity() {
   /** Current orientation override mode; persisted across launches. */
   private var orientationMode: Int = MODE_AUTO
 
+  /** Accumulated seek amount (signed seconds) shown in the side overlay. */
+  private var seekAccumSec: Long = 0L
+  private var seekDirection: Int = 0
+  private var lastSeekTimeMs: Long = 0L
+  private val seekHandler = Handler(Looper.getMainLooper())
+  private val hideSeekIndicator = Runnable {
+    listOf(binding.seekIndicatorLeft, binding.seekIndicatorRight).forEach { view ->
+      view.animate()
+        .alpha(0f)
+        .setDuration(180L)
+        .withEndAction {
+          view.visibility = View.GONE
+          view.alpha = 1f
+        }
+        .start()
+    }
+  }
+
   private val isFdroidFlavor: Boolean get() = BuildConfig.FLAVOR == "fdroid"
 
   /**
@@ -91,6 +115,7 @@ class PlayerActivity : AppCompatActivity() {
     binding.folderButton.setOnClickListener { onFolderButtonClicked() }
     binding.rotateButton.setOnClickListener { cycleOrientationMode() }
     binding.folderGrantBanner.setOnClickListener { onBannerClicked() }
+    setupDoubleTapSeek()
 
     orientationMode = prefs.getInt(KEY_ORIENT, MODE_AUTO)
     applyOrientationMode()
@@ -414,6 +439,84 @@ class PlayerActivity : AppCompatActivity() {
   }
 
   /**
+   * Wires double-tap-to-seek on the left and right bands of the player view,
+   * MX Player style. Tap the right side once to skip forward 10s; tap quickly
+   * again on the same side and the on-screen indicator accumulates ("+20s",
+   * "+30s", "+1m"). The middle 20% of the screen is a dead zone so accidental
+   * taps near the play/pause row do not trigger a seek.
+   */
+  @SuppressLint("ClickableViewAccessibility")
+  private fun setupDoubleTapSeek() {
+    val detector = GestureDetector(
+      this,
+      object : GestureDetector.SimpleOnGestureListener() {
+        override fun onDoubleTap(e: MotionEvent): Boolean {
+          val width = binding.playerView.width
+          if (width <= 0) return false
+          val frac = e.x / width.toFloat()
+          val direction = when {
+            frac < DEAD_ZONE_START -> -1
+            frac > DEAD_ZONE_END -> +1
+            else -> return false
+          }
+          handleDoubleTapSeek(direction)
+          return true
+        }
+      },
+    )
+    binding.playerView.setOnTouchListener { _, ev ->
+      detector.onTouchEvent(ev)
+      // Returning false lets PlayerView keep handling single taps for the
+      // controller toggle and dragging on the seek bar.
+      false
+    }
+  }
+
+  private fun handleDoubleTapSeek(direction: Int) {
+    val p = player ?: return
+    val now = SystemClock.uptimeMillis()
+    val sameDirection = direction == seekDirection
+    val withinWindow = now - lastSeekTimeMs <= SEEK_ACCUM_WINDOW_MS
+    seekAccumSec = if (sameDirection && withinWindow) {
+      seekAccumSec + direction * SEEK_STEP_SEC
+    } else {
+      direction * SEEK_STEP_SEC
+    }
+    seekDirection = direction
+    lastSeekTimeMs = now
+
+    val duration = p.duration.coerceAtLeast(0L)
+    val target = (p.currentPosition + direction * SEEK_STEP_SEC * 1000L)
+      .coerceIn(0L, if (duration > 0) duration else Long.MAX_VALUE)
+    p.seekTo(target)
+    showSeekIndicator()
+  }
+
+  private fun showSeekIndicator() {
+    val target = if (seekDirection >= 0) binding.seekIndicatorRight else binding.seekIndicatorLeft
+    val other = if (seekDirection >= 0) binding.seekIndicatorLeft else binding.seekIndicatorRight
+    other.visibility = View.GONE
+    other.alpha = 1f
+    target.text = formatSeek(seekAccumSec)
+    target.alpha = 1f
+    target.visibility = View.VISIBLE
+    seekHandler.removeCallbacks(hideSeekIndicator)
+    seekHandler.postDelayed(hideSeekIndicator, SEEK_HIDE_DELAY_MS)
+  }
+
+  private fun formatSeek(secondsSigned: Long): String {
+    val sign = if (secondsSigned >= 0) "+" else "-"
+    val abs = kotlin.math.abs(secondsSigned)
+    val minutes = abs / 60
+    val seconds = abs % 60
+    return when {
+      minutes == 0L -> "${sign}${seconds}s"
+      seconds == 0L -> "${sign}${minutes}m"
+      else -> "${sign}${minutes}m${seconds}s"
+    }
+  }
+
+  /**
    * When only one file is open without a folder grant, next/previous opens the
    * grant flow (SAF picker or all-files dialog) instead of doing nothing.
    */
@@ -491,5 +594,11 @@ class PlayerActivity : AppCompatActivity() {
     private const val MODE_AUTO = 0
     private const val MODE_LANDSCAPE = 1
     private const val MODE_PORTRAIT = 2
+
+    private const val SEEK_STEP_SEC = 10L
+    private const val SEEK_ACCUM_WINDOW_MS = 1500L
+    private const val SEEK_HIDE_DELAY_MS = 700L
+    private const val DEAD_ZONE_START = 0.40f
+    private const val DEAD_ZONE_END = 0.60f
   }
 }
