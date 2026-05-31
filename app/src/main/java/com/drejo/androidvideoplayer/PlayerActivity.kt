@@ -66,6 +66,9 @@ class PlayerActivity : AppCompatActivity() {
   private var seekAccumSec: Long = 0L
   private var seekDirection: Int = 0
   private var lastSeekTimeMs: Long = 0L
+  /** Number of consecutive same-direction double-taps within the accumulate
+   *  window; used to escalate the seek step from 10s to 30s after a few taps. */
+  private var consecutiveDoubleTaps: Int = 0
   private val seekHandler = Handler(Looper.getMainLooper())
   private val hideSeekIndicator = Runnable {
     listOf(binding.seekIndicatorLeft, binding.seekIndicatorRight).forEach { view ->
@@ -452,9 +455,26 @@ class PlayerActivity : AppCompatActivity() {
    */
   @SuppressLint("ClickableViewAccessibility")
   private fun setupDoubleTapSeek() {
+    binding.playerView.controllerShowTimeoutMs = CONTROLLER_TIMEOUT_MS
     val detector = GestureDetector(
       this,
       object : GestureDetector.SimpleOnGestureListener() {
+        override fun onDown(e: MotionEvent): Boolean = true
+
+        // Suppress the default PlayerView toggle on every tap. We will
+        // perform the toggle ourselves only after a tap has been confirmed
+        // as a single tap (i.e. no double-tap follows within the window).
+        // This stops the controller from flickering during rapid consecutive
+        // double-taps used for seeking.
+        override fun onSingleTapUp(e: MotionEvent): Boolean = true
+
+        override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
+          with(binding.playerView) {
+            if (isControllerFullyVisible) hideController() else showController()
+          }
+          return true
+        }
+
         override fun onDoubleTap(e: MotionEvent): Boolean {
           val width = binding.playerView.width
           if (width <= 0) return false
@@ -465,16 +485,18 @@ class PlayerActivity : AppCompatActivity() {
             else -> return false
           }
           handleDoubleTapSeek(direction)
+          // Keep the controller visible across rapid consecutive seeks; its
+          // own timer hides it again CONTROLLER_TIMEOUT_MS after the last tap.
+          binding.playerView.showController()
           return true
         }
+
+        // Consume the rest of the double-tap gesture (MOVE/UP) so PlayerView
+        // does not toggle the controller on the second tap's UP event.
+        override fun onDoubleTapEvent(e: MotionEvent): Boolean = true
       },
     )
-    binding.playerView.setOnTouchListener { _, ev ->
-      detector.onTouchEvent(ev)
-      // Returning false lets PlayerView keep handling single taps for the
-      // controller toggle and dragging on the seek bar.
-      false
-    }
+    binding.playerView.setOnTouchListener { _, ev -> detector.onTouchEvent(ev) }
   }
 
   private fun handleDoubleTapSeek(direction: Int) {
@@ -482,16 +504,25 @@ class PlayerActivity : AppCompatActivity() {
     val now = SystemClock.uptimeMillis()
     val sameDirection = direction == seekDirection
     val withinWindow = now - lastSeekTimeMs <= SEEK_ACCUM_WINDOW_MS
-    seekAccumSec = if (sameDirection && withinWindow) {
-      seekAccumSec + direction * SEEK_STEP_SEC
-    } else {
-      direction * SEEK_STEP_SEC
-    }
+
+    consecutiveDoubleTaps =
+      if (sameDirection && withinWindow) consecutiveDoubleTaps + 1 else 1
+
+    // First few taps use the small step; once we cross the threshold we
+    // escalate to the big step so long jumps get faster without forcing
+    // the user to tap dozens of times.
+    val stepSec =
+      if (consecutiveDoubleTaps <= SEEK_BIG_STEP_AFTER_TAPS) SEEK_STEP_SEC
+      else SEEK_BIG_STEP_SEC
+    val deltaSec = direction * stepSec
+
+    seekAccumSec =
+      if (sameDirection && withinWindow) seekAccumSec + deltaSec else deltaSec
     seekDirection = direction
     lastSeekTimeMs = now
 
     val duration = p.duration.coerceAtLeast(0L)
-    val target = (p.currentPosition + direction * SEEK_STEP_SEC * 1000L)
+    val target = (p.currentPosition + deltaSec * 1000L)
       .coerceIn(0L, if (duration > 0) duration else Long.MAX_VALUE)
     p.seekTo(target)
     showSeekIndicator()
@@ -601,9 +632,14 @@ class PlayerActivity : AppCompatActivity() {
     private const val MODE_PORTRAIT = 2
 
     private const val SEEK_STEP_SEC = 10L
+    private const val SEEK_BIG_STEP_SEC = 30L
+    /** After this many consecutive same-direction double-taps the step size
+     *  switches from SEEK_STEP_SEC to SEEK_BIG_STEP_SEC. */
+    private const val SEEK_BIG_STEP_AFTER_TAPS = 3
     private const val SEEK_ACCUM_WINDOW_MS = 1500L
     private const val SEEK_HIDE_DELAY_MS = 700L
     private const val DEAD_ZONE_START = 0.40f
     private const val DEAD_ZONE_END = 0.60f
+    private const val CONTROLLER_TIMEOUT_MS = 3000
   }
 }

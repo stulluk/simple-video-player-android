@@ -91,6 +91,39 @@ cycles through three modes: AUTO (full sensor — overrides the system rotation
 lock for this app, like YouTube and VLC), forced landscape, and forced
 portrait. The choice is remembered.
 
+### Double-tap to seek
+
+Double-tapping the **right** third of the video jumps forward; the **left**
+third jumps backward. The middle 20 % of the screen is a dead zone so taps
+near the play / pause row never trigger a seek by accident. Each tap pops up
+a small overlay (e.g. `+10s`, `+40s`, `−1m30s`) on the side that was tapped;
+it fades out shortly after the last tap.
+
+The step size escalates with consecutive same-direction taps so long jumps
+do not require dozens of taps:
+
+| Consecutive double-taps in same direction | Step per tap | Overlay shows |
+|---|---|---|
+| 1 | +10 s | `+10s` |
+| 2 | +10 s | `+20s` |
+| 3 | +10 s | `+30s` |
+| 4 | +30 s | `+1m` |
+| 5 | +30 s | `+1m30s` |
+| 6+ | +30 s | accumulates |
+
+Reverse direction or pause for ~1.5 s and the counter resets back to the
+small step. Seeks use ExoPlayer's `SeekParameters.CLOSEST_SYNC`, so they
+land on the nearest keyframe and feel instant on `.mkv` files where exact
+seeking would otherwise stall for a second or two.
+
+### Controller (bottom bar) behaviour
+
+A custom gesture listener swallows the second tap of every double-tap so
+the Media3 controller does not flicker open/closed while you are seeking.
+A confirmed single tap (no double-tap follows within ~300 ms) toggles the
+controller manually. The controller auto-hides 3 s after the last
+interaction.
+
 ## Build
 
 The app is compiled inside Docker (no Android toolchain is installed on the
@@ -132,6 +165,51 @@ adb install -r app/build/outputs/apk/fdroid/debug/app-fdroid-debug.apk
    folder. The first video starts playing; use **⏮ / ⏭** to navigate.
    Alternatively, open any video from a file manager via **Open with → drejo
    player**, then tap the bottom banner once to grant that folder.
+
+## Design notes
+
+A few decisions worth calling out, since they shape the rest of the code:
+
+- **Two flavors, one codebase.** `play` and `fdroid` differ only in a
+  manifest fragment (`MANAGE_EXTERNAL_STORAGE` lives in `app/src/fdroid/`)
+  and a couple of `BuildConfig.FLAVOR` checks. Everything else — playback,
+  UI, rotation, seek gestures — is shared.
+- **SAF first, all-files second.** The SAF path is the default everywhere
+  because it works on both flavors and never asks for a dangerous
+  permission. All-files access is purely a power-user shortcut on the
+  F-Droid build that makes "open from any file manager" a one-step flow,
+  matching how MX Player feels.
+- **Banner instead of an auto-popup.** When you open a video from a folder
+  that has not been granted yet, the Play build shows a tappable banner at
+  the bottom rather than launching the SAF picker on top of your video.
+  This is partly UX (the video starts immediately) and partly a workaround
+  for Samsung's DocumentsUI, which ignores `EXTRA_INITIAL_URI` and would
+  drop the user in `DCIM/Camera` regardless of the hint.
+- **Rotation override by default.** The rotation button uses
+  `SCREEN_ORIENTATION_FULL_SENSOR` for AUTO mode, so the app rotates with
+  the phone even when system rotation lock is on. This matches YouTube and
+  VLC; the alternative (respecting the system lock) makes a video player
+  feel broken on phones that are kept locked to portrait by default.
+- **`CLOSEST_SYNC` over exact seek.** `.mkv` files often have sparse
+  keyframes; an exact seek can stall the pipeline for a second or two,
+  which is unacceptable when the user is rapidly double-tapping. Snapping
+  to the nearest sync sample trades a few hundred milliseconds of accuracy
+  for instant response.
+- **Custom double-tap detector.** Media3's `PlayerView` toggles its
+  controller on every tap, which causes the bottom bar to flicker when you
+  rapid-fire double-taps for seeking. We intercept touches with a
+  `GestureDetector`, suppress the default per-tap toggle, and only toggle
+  the controller after a single tap is *confirmed* (no double-tap arrives
+  within the window).
+- **No Compose, no Material 3 dynamic theming.** The whole UI is a single
+  XML layout to keep the APK tiny and the build fast; the project does not
+  pull in Compose, Hilt, navigation, or anything else that is not strictly
+  needed to play a video.
+- **Docker-only build.** Nothing in the repo expects you to install
+  Android Studio, the Android SDK, or a specific JDK on your host; the
+  build image bundles JDK 17, SDK 35, and Gradle 8.9, and the debug
+  keystore is volume-mounted so successive builds keep the same signature
+  and reinstall over each other cleanly.
 
 ## Contributing
 
