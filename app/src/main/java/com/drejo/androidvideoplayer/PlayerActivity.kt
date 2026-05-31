@@ -25,6 +25,7 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.SeekParameters
 import com.drejo.androidvideoplayer.databinding.ActivityPlayerBinding
 import java.io.File
 
@@ -417,6 +418,10 @@ class PlayerActivity : AppCompatActivity() {
   private fun initPlayer() {
     if (player != null) return
     val exo = ExoPlayer.Builder(this).build()
+    // Seek to the nearest keyframe instead of decoding up to the exact frame.
+    // This trades a couple of seconds of accuracy for an essentially instant
+    // double-tap seek, matching MX Player's behaviour.
+    exo.setSeekParameters(SeekParameters.CLOSEST_SYNC)
     binding.playerView.player = exo
     binding.playerView.setShowFastForwardButton(false)
     binding.playerView.setShowRewindButton(false)
