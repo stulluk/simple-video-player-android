@@ -1,0 +1,45 @@
+# ---------------------------------------------------------------------------
+# This file is NOT part of the app build. It is the recipe you submit to
+# F-Droid so they can build drejo player from source on their own servers.
+#
+# How to use it:
+#   1. Fork https://gitlab.com/fdroid/fdroiddata
+#   2. Copy this file to:
+#        metadata/com.drejo.androidvideoplayer.fdroid.yml
+#      (the file name must equal the applicationId of the fdroid flavor,
+#       which is com.drejo.androidvideoplayer + ".fdroid" suffix)
+#   3. Commit, push to your fork, and open a Merge Request against fdroiddata.
+#   4. The F-Droid CI will run `fdroid build` with the recipe below.
+#
+# Keep this in sync with app/build.gradle.kts on every release (bump
+# versionName / versionCode / commit, and add a new Builds: entry).
+# ---------------------------------------------------------------------------
+
+Categories:
+  - Multimedia
+License: MIT
+AuthorName: Sertac TULLUK
+SourceCode: https://github.com/stulluk/drejo-player-android
+IssueTracker: https://github.com/stulluk/drejo-player-android/issues
+
+AutoName: drejo player
+RepoType: git
+Repo: https://github.com/stulluk/drejo-player-android.git
+
+# This (F-Droid) flavor requests MANAGE_EXTERNAL_STORAGE so that opening a
+# video from any file manager makes next/previous work across the whole
+# folder, including hidden folders the media scanner ignores. The reviewer
+# may attach an anti-feature label for all-files access; that is expected.
+
+Builds:
+  - versionName: 1.0.0-fdroid
+    versionCode: 1
+    commit: v1.0.0
+    subdir: app
+    gradle:
+      - fdroid
+
+AutoUpdateMode: Version
+UpdateCheckMode: Tags
+CurrentVersion: 1.0.0-fdroid
+CurrentVersionCode: 1

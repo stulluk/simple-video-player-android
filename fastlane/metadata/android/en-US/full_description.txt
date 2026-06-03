@@ -1,0 +1,23 @@
+A deliberately tiny, free, ad-free, open-source video player whose only job is
+to play videos and reliably jump to the next / previous video in the same
+folder, including folders that mix .mp4 and .mkv files.
+
+It is built on Android's modern media stack (AndroidX Media3 / ExoPlayer). Every
+video in the chosen folder is added to one playlist, so the next / previous
+buttons just work across mixed .mp4 + .mkv content; a broken or unsupported file
+is skipped instead of freezing playback.
+
+Features:
+
+* Reliable next / previous across a whole folder, regardless of .mp4 vs .mkv.
+* Double-tap the right or left side to seek forward / backward; the step grows
+  with consecutive taps and is capped relative to the video length.
+* Rotation button that can force landscape, force portrait, or follow the
+  sensor even when the system rotation lock is on (like YouTube and VLC).
+* Optional all-files access (this F-Droid build) so opening any video from any
+  file manager lets next / previous work through the whole folder, including
+  hidden folders that the media scanner ignores. If you decline the permission,
+  the app falls back to the Storage Access Framework folder picker.
+
+No ads, no tracking, no analytics. Plays video only: no audio-player mode, no
+image viewer. Released under the MIT license.
