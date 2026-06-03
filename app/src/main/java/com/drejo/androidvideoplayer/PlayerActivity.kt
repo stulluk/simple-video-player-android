@@ -518,12 +518,16 @@ class PlayerActivity : AppCompatActivity() {
     consecutiveDoubleTaps =
       if (sameDirection && withinWindow) consecutiveDoubleTaps + 1 else 1
 
-    // First few taps use the small step; once we cross the threshold we
-    // escalate to the big step so long jumps get faster without forcing
-    // the user to tap dozens of times.
-    val stepSec =
-      if (consecutiveDoubleTaps <= SEEK_BIG_STEP_AFTER_TAPS) SEEK_STEP_SEC
-      else SEEK_BIG_STEP_SEC
+    // Each consecutive same-direction tap grows the step linearly by the base
+    // unit: 5s, 10s, 15s, 20s, ... The per-tap step is capped at 1/10 of the
+    // total video length so it scales with content: short clips take small
+    // steps, long movies allow large jumps. Falls back to an uncapped ramp
+    // when the duration is unknown (e.g. live streams).
+    val durationMs = p.duration
+    val maxStepSec =
+      if (durationMs > 0) (durationMs / 1000L / 10L).coerceAtLeast(SEEK_STEP_SEC)
+      else Long.MAX_VALUE
+    val stepSec = (consecutiveDoubleTaps * SEEK_STEP_SEC).coerceAtMost(maxStepSec)
     val deltaSec = direction * stepSec
 
     seekAccumSec =
@@ -531,10 +535,21 @@ class PlayerActivity : AppCompatActivity() {
     seekDirection = direction
     lastSeekTimeMs = now
 
-    val duration = p.duration.coerceAtLeast(0L)
-    val target = (p.currentPosition + deltaSec * 1000L)
-      .coerceIn(0L, if (duration > 0) duration else Long.MAX_VALUE)
-    p.seekTo(target)
+    val duration = durationMs.coerceAtLeast(0L)
+    val rawTarget = p.currentPosition + deltaSec * 1000L
+    if (direction > 0 && duration > 0 && rawTarget >= duration) {
+      // The forward tap overshoots the end. A CLOSEST_SYNC seek to the end
+      // snaps back to the previous keyframe (often 8-10s earlier), trapping
+      // the user near the end. Seek EXACTLY to ~1s before the end instead so
+      // the clip plays out and ExoPlayer auto-advances to the next video.
+      val tail = (duration - END_TAIL_MS).coerceIn(0L, duration)
+      p.setSeekParameters(SeekParameters.EXACT)
+      p.seekTo(tail.coerceAtLeast(p.currentPosition))
+      p.setSeekParameters(SeekParameters.CLOSEST_SYNC)
+    } else {
+      val target = rawTarget.coerceIn(0L, if (duration > 0) duration else Long.MAX_VALUE)
+      p.seekTo(target)
+    }
     showSeekIndicator()
   }
 
@@ -641,12 +656,14 @@ class PlayerActivity : AppCompatActivity() {
     private const val MODE_LANDSCAPE = 1
     private const val MODE_PORTRAIT = 2
 
-    private const val SEEK_STEP_SEC = 10L
-    private const val SEEK_BIG_STEP_SEC = 30L
-    /** After this many consecutive same-direction double-taps the step size
-     *  switches from SEEK_STEP_SEC to SEEK_BIG_STEP_SEC. */
-    private const val SEEK_BIG_STEP_AFTER_TAPS = 3
-    private const val SEEK_ACCUM_WINDOW_MS = 1500L
+    /** Base seek unit. The Nth consecutive same-direction double-tap jumps
+     *  N * SEEK_STEP_SEC seconds (5s, 10s, 15s, ...), capped at 1/10 of the
+     *  total video duration. */
+    private const val SEEK_STEP_SEC = 5L
+    /** When a forward seek overshoots the end, land this far before the end
+     *  (exact seek) so the clip plays out and auto-advances to the next. */
+    private const val END_TAIL_MS = 1000L
+    private const val SEEK_ACCUM_WINDOW_MS = 800L
     private const val SEEK_HIDE_DELAY_MS = 700L
     private const val DEAD_ZONE_START = 0.40f
     private const val DEAD_ZONE_END = 0.60f

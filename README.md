@@ -96,33 +96,37 @@ portrait. The choice is remembered.
 Double-tapping the **right** third of the video jumps forward; the **left**
 third jumps backward. The middle 20 % of the screen is a dead zone so taps
 near the play / pause row never trigger a seek by accident. Each tap pops up
-a small overlay (e.g. `+10s`, `+40s`, `−1m30s`) on the side that was tapped;
-it fades out shortly after the last tap.
+a small overlay (e.g. `+5s`, `+15s`, `−1m`) in the **top-left** or
+**top-right** corner (away from your thumb); it fades out shortly after the
+last tap.
 
-The step size escalates with consecutive same-direction taps so long jumps
-do not require dozens of taps:
+The step grows **linearly** with consecutive same-direction taps within an
+0.8 s window: 5 s, 10 s, 15 s, 20 s, … The per-tap step is capped at
+**one tenth of the video length** (e.g. a 10-minute clip allows up to 60 s
+per tap; a 50-second clip stays at 5 s). Change direction or pause longer
+than 0.8 s and the ramp resets to +5 s.
 
-| Consecutive double-taps in same direction | Step per tap | Overlay shows |
-|---|---|---|
-| 1 | +10 s | `+10s` |
-| 2 | +10 s | `+20s` |
-| 3 | +10 s | `+30s` |
-| 4 | +30 s | `+1m` |
-| 5 | +30 s | `+1m30s` |
-| 6+ | +30 s | accumulates |
+| Consecutive double-taps (same direction) | Step per tap (example) |
+|---|---|
+| 1 | +5 s |
+| 2 | +10 s |
+| 3 | +15 s |
+| … | +5 × N s, capped at duration ÷ 10 |
 
-Reverse direction or pause for ~1.5 s and the counter resets back to the
-small step. Seeks use ExoPlayer's `SeekParameters.CLOSEST_SYNC`, so they
-land on the nearest keyframe and feel instant on `.mkv` files where exact
-seeking would otherwise stall for a second or two.
+Seeks use `SeekParameters.CLOSEST_SYNC` for speed on `.mkv` files. When a
+forward tap would overshoot the end, the player seeks **exactly** to ~1 s
+before the end instead of snapping to the previous keyframe (which often
+left you stuck 8–10 s from the finish). The clip then plays out and
+auto-advances to the next video in the playlist.
 
 ### Controller (bottom bar) behaviour
 
 A custom gesture listener swallows the second tap of every double-tap so
 the Media3 controller does not flicker open/closed while you are seeking.
 A confirmed single tap (no double-tap follows within ~300 ms) toggles the
-controller manually. The controller auto-hides 3 s after the last
-interaction.
+controller manually. The controller stays visible during seek; its full-screen
+**scrim is transparent** so the video does not dim. It auto-hides 3 s after
+the last interaction.
 
 ## Build
 
