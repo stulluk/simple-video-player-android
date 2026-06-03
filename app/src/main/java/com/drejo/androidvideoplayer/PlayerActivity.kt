@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.ActivityInfo
+import android.graphics.Color
 import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
@@ -456,6 +457,13 @@ class PlayerActivity : AppCompatActivity() {
   @SuppressLint("ClickableViewAccessibility")
   private fun setupDoubleTapSeek() {
     binding.playerView.controllerShowTimeoutMs = CONTROLLER_TIMEOUT_MS
+    // The Media3 controller paints a full-screen "scrim" view behind its
+    // buttons that dims the video whenever it is shown. We keep the bar
+    // itself (buttons + progress) but make that scrim transparent so the
+    // picture never darkens when the controller appears.
+    binding.playerView
+      .findViewById<View>(androidx.media3.ui.R.id.exo_controls_background)
+      ?.setBackgroundColor(Color.TRANSPARENT)
     val detector = GestureDetector(
       this,
       object : GestureDetector.SimpleOnGestureListener() {
@@ -486,7 +494,9 @@ class PlayerActivity : AppCompatActivity() {
           }
           handleDoubleTapSeek(direction)
           // Keep the controller visible across rapid consecutive seeks; its
-          // own timer hides it again CONTROLLER_TIMEOUT_MS after the last tap.
+          // scrim is transparent (see setupDoubleTapSeek) so the bar shows
+          // without dimming the video. Its own timer hides it again
+          // CONTROLLER_TIMEOUT_MS after the last tap.
           binding.playerView.showController()
           return true
         }
